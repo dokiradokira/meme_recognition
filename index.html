@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="connect-src 'self'; script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'self'">
+    <meta name="description" content="用摄像头做动作，解锁对应的猫猫表情包。">
+    <title>姿势派对 · Pose to Meme</title>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div class="brand"><span aria-hidden="true">✦</span> POSE TO MEME</div>
+        <h1>姿势<span>派对</span></h1>
+        <p>做个动作，让猫猫替你说话。</p>
+      </header>
+      <div class="workspace">
+        <section class="panel" aria-labelledby="camera-title">
+          <div class="panel-header">
+            <h2 id="camera-title">摄像头</h2>
+            <span id="status" class="status" role="status">待开启</span>
+          </div>
+          <div class="stage" id="stage">
+            <video id="preview" aria-label="镜像摄像头预览" autoplay muted playsinline hidden></video>
+            <canvas id="skeleton" aria-hidden="true" hidden></canvas>
+            <div id="camera-empty" class="empty">
+              <span class="camera-icon" aria-hidden="true"></span>
+              <p>开启摄像头开始</p>
+              <small>请让头部、肩膀和双手入镜</small>
+            </div>
+          </div>
+          <div class="controls">
+            <button id="camera-button" type="button">开启摄像头</button>
+            <label><input type="checkbox" id="debug"> 骨架调试</label>
+          </div>
+          <p id="camera-error" class="error" role="alert" hidden></p>
+          <p id="diagnosis" class="diagnosis" hidden></p>
+        </section>
+        <section class="panel" aria-labelledby="result-title">
+          <div class="panel-header"><h2 id="result-title">表情包</h2></div>
+          <div class="result" aria-live="polite" aria-atomic="true">
+            <div class="empty" id="result-empty">
+              <span class="spark" aria-hidden="true">✷</span>
+              <p>等待第一个动作</p>
+              <small>从下方挑一个动作试试</small>
+            </div>
+            <figure id="meme" hidden>
+              <img id="meme-image" alt="">
+              <figcaption>
+                <strong id="meme-caption"></strong>
+                <span id="meme-action"></span>
+              </figcaption>
+            </figure>
+          </div>
+        </section>
+      </div>
+      <section class="guide" aria-labelledby="guide-title">
+        <h2 id="guide-title">试试这些动作</h2>
+        <ul id="actions"></ul>
+      </section>
+      <footer>摄像头画面和身体关键点只在浏览器内处理。</footer>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

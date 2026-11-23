@@ -1,0 +1,34 @@
+{
+  "hands-up": {
+    "name": "双手举高",
+    "hint": "双手高过头顶，保持片刻",
+    "caption": "我投降",
+    "image": "memes/hands-up.png",
+    "alt": "小猫睁大眼睛，举起双爪",
+    "source": "项目原创插画，可随项目分发"
+  },
+  "arms-out": {
+    "name": "双臂横举",
+    "hint": "双臂向两侧伸直，与肩同高",
+    "caption": "我宣布个事",
+    "image": "memes/arms-out.png",
+    "alt": "小猫把双爪水平向外伸开",
+    "source": "项目原创插画，可随项目分发"
+  },
+  "wave": {
+    "name": "单手挥动",
+    "hint": "一只手保持在肩上方，左右挥一次",
+    "caption": "嗨，看到我了吗",
+    "image": "memes/wave.png",
+    "alt": "小猫笑着挥动一只爪子",
+    "source": "项目原创插画，可随项目分发"
+  },
+  "arms-crossed": {
+    "name": "双臂交叉",
+    "hint": "双臂交叉，两手靠近对侧上臂",
+    "caption": "这事我不同意",
+    "image": "memes/arms-crossed.png",
+    "alt": "小猫皱眉，双爪交叉抱在胸前",
+    "source": "项目原创插画，可随项目分发"
+  }
+}
