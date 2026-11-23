@@ -32,8 +32,12 @@
           <div class="controls">
             <button id="camera-button" type="button">开启摄像头</button>
             <label><input type="checkbox" id="debug"> 骨架调试</label>
+            <label id="device-control" hidden>摄像头
+              <select id="camera-device"></select>
+            </label>
           </div>
           <p id="camera-error" class="error" role="alert" hidden></p>
+          <p id="recognition-feedback" class="diagnosis" aria-live="polite" hidden></p>
           <p id="diagnosis" class="diagnosis" hidden></p>
         </section>
         <section class="panel" aria-labelledby="result-title">
@@ -45,12 +49,22 @@
               <small>从下方挑一个动作试试</small>
             </div>
             <figure id="meme" hidden>
-              <img id="meme-image" alt="">
+              <div class="meme-visual">
+                <img id="meme-image" alt="">
+                <div id="freeze-frame" class="freeze-frame" aria-hidden="true" hidden>
+                  <canvas id="freeze-canvas" width="0" height="0"></canvas>
+                  <span>我投降</span>
+                </div>
+              </div>
               <figcaption>
                 <strong id="meme-caption"></strong>
                 <span id="meme-action"></span>
               </figcaption>
             </figure>
+          </div>
+          <div class="controls" id="freeze-control" hidden>
+            <label><input type="checkbox" id="freeze-toggle" aria-describedby="freeze-description"> 本人定格</label>
+            <small id="freeze-description">双手举高时，临时用一帧摄像头画面生成定格效果。</small>
           </div>
         </section>
       </div>

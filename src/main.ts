@@ -1,7 +1,8 @@
 import './style.css';
 import { Camera } from './camera';
+import { FreezeFrame } from './freeze-frame';
 import memes from './memes.json';
-import { actions, type Action, type Landmark } from './recognizer';
+import { actions, type Action, type Feedback, type Landmark } from './recognizer';
 
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id)! as T;
 const preview = element<HTMLVideoElement>('preview');
@@ -11,7 +12,14 @@ const debug = element<HTMLInputElement>('debug');
 const status = element('status');
 const button = element<HTMLButtonElement>('camera-button');
 const errorText = element('camera-error');
+const feedbackText = element('recognition-feedback');
 const diagnosisText = element('diagnosis');
+const deviceControl = element('device-control');
+const deviceSelect = element<HTMLSelectElement>('camera-device');
+const freezeToggle = element<HTMLInputElement>('freeze-toggle');
+const freezeControl = element('freeze-control');
+const freeze = new FreezeFrame(element('freeze-frame'), element<HTMLCanvasElement>('freeze-canvas'), preview);
+let trackingLostAt: number | undefined;
 const meme = element('meme');
 const image = element<HTMLImageElement>('meme-image');
 const asset = (path: string) => import.meta.env.BASE_URL + path;
@@ -36,6 +44,7 @@ for (const action of actions) {
 }
 
 function showResult(action: Action) {
+  freeze.clear();
   const { name, caption, image: path, alt } = memes[action];
   image.hidden = false;
   image.alt = alt;
@@ -45,6 +54,7 @@ function showResult(action: Action) {
   element('result-empty').hidden = true;
   meme.hidden = false;
   for (const [key, card] of cards) card.classList.toggle('selected', key === action);
+  if (action === 'hands-up' && freezeToggle.checked) freeze.show();
 }
 
 image.addEventListener('error', () => { image.hidden = true; });
@@ -80,12 +90,27 @@ function drawSkeleton(points: Landmark[]) {
 }
 
 const labels = { idle: '待开启', requesting: '等待摄像头授权…', loading: '正在加载姿态模型…', active: '识别中', error: '需要重试' };
-const diagnoses = {
-  'no-person': '未检测到人物',
-  'low-quality': '关键点不足，请正面入镜并露出双肩和手腕',
-  tracking: '已检测到姿态',
-  ambiguous: '动作重叠，等待明确姿势',
+const jointsNames = { head: '头部', shoulders: '双肩', elbows: '手肘', wrists: '手腕' };
+const interruptionNames = {
+  changed: '姿态改变',
+  ambiguous: '动作重叠',
+  'occlusion-timeout': '关键点遮挡超时',
+  'no-person': '人物离开画面',
+  'frame-gap': '视频帧间隔过长',
 };
+
+function feedbackMessage({ state, action, missing }: Feedback) {
+  const name = action && memes[action].name;
+  switch (state) {
+    case 'no-person': return '未检测到人物，请回到画面';
+    case 'missing': return '请露出' + missing?.map((joint) => jointsNames[joint]).join('、');
+    case 'framing': return '请靠近摄像头并正面入镜';
+    case 'holding': return '请保持「' + name + '」姿势';
+    case 'matched': return '已识别「' + name + '」，可以试试下一个动作';
+    case 'ambiguous': return '动作重叠，请做一个明确的姿势';
+    default: return '请选择下方的一个动作试试';
+  }
+}
 
 const camera = new Camera(preview, {
   status(phase, error) {
@@ -96,20 +121,50 @@ const camera = new Camera(preview, {
     preview.hidden = !started;
     element('camera-empty').hidden = started;
     skeleton.hidden = phase !== 'active' || !debug.checked;
+    freezeControl.hidden = phase !== 'active';
+    if (phase !== 'active') deviceControl.hidden = true;
     button.textContent = phase === 'error' ? '重试' : busy ? '关闭摄像头' : '开启摄像头';
     button.classList.toggle('stop', busy);
     errorText.textContent = error ?? '';
     errorText.hidden = !error;
   },
-  frame(points, diagnosis) {
-    if (!debug.checked) return;
-    diagnosisText.textContent = diagnoses[diagnosis];
-    diagnosisText.hidden = false;
-    drawSkeleton(points);
+  frame(points, feedback, time) {
+    const message = feedbackMessage(feedback);
+    if (feedbackText.textContent !== message) feedbackText.textContent = message;
+    feedbackText.hidden = false;
+    const details = [];
+    if (feedback.action && (feedback.state === 'holding' || feedback.state === 'missing')) {
+      details.push('候选动作：' + memes[feedback.action].name);
+    }
+    if (feedback.missing?.length) details.push('缺少关键点：' + feedback.missing.map((joint) => jointsNames[joint]).join('、'));
+    if (feedback.interruption) details.push('上次确认中断：' + interruptionNames[feedback.interruption]);
+    diagnosisText.textContent = details.join(' · ');
+    diagnosisText.hidden = !debug.checked || !details.length;
+    if (debug.checked) drawSkeleton(points);
+
+    if (feedback.state === 'no-person') freeze.clear();
+    if (feedback.missing?.includes('shoulders') || feedback.state === 'framing') {
+      trackingLostAt ??= time;
+      if (time - trackingLostAt >= 300) freeze.clear();
+    } else {
+      trackingLostAt = undefined;
+    }
   },
   result: showResult,
+  devices(cameras, selected) {
+    const accurateSelection = cameras.some(({ deviceId }) => deviceId === selected);
+    const options = cameras.map(({ deviceId, label }, index) => new Option(label || '摄像头 ' + (index + 1), deviceId));
+    if (!accurateSelection) options.unshift(new Option('当前摄像头', ''));
+    deviceSelect.replaceChildren(...options);
+    deviceSelect.value = accurateSelection ? selected : '';
+    deviceControl.hidden = !cameras.length;
+  },
   clear() {
+    freeze.clear();
+    trackingLostAt = undefined;
     context?.clearRect(0, 0, skeleton.width, skeleton.height);
+    feedbackText.hidden = true;
+    feedbackText.textContent = '';
     diagnosisText.hidden = true;
     diagnosisText.textContent = '';
     meme.hidden = true;
@@ -123,6 +178,8 @@ const camera = new Camera(preview, {
 }, async () => (await import('./pose')).loadDetector());
 
 button.addEventListener('click', () => camera.toggle());
+deviceSelect.addEventListener('change', () => camera.select(deviceSelect.value));
+freezeToggle.addEventListener('change', () => { if (!freezeToggle.checked) freeze.clear(); });
 debug.addEventListener('change', () => {
   skeleton.hidden = status.dataset.phase !== 'active' || !debug.checked;
   diagnosisText.hidden = !debug.checked || !diagnosisText.textContent;
