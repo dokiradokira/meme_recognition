@@ -204,7 +204,7 @@ test('switches actions and applies global cooldown to a completed wave', () => {
   assert.deepEqual(frames(recognizer, pose('arms-out'), 650, 950), [{ action: 'arms-out', time: 950 }]);
 });
 
-test('all 12 ordered pairs switch directly with stable landmarks', () => {
+test('all 20 ordered pairs switch directly with stable landmarks', () => {
   const perform = (recognizer, action, start) => {
     if (action !== 'wave') return frames(recognizer, pose(action), start, start + 450);
     return [0, 15, 40, 15, 0, 0, 0, 0, 0, 0].flatMap((offset, index) =>
@@ -248,13 +248,60 @@ test('missing subject, small shoulder span and gaps never complete a stale candi
   assert.deepEqual(frames(recognizer, pose('hands-up'), 1800, 1800), [{ action: 'hands-up', time: 1800 }]);
 });
 
-test('every action has complete metadata and a local PNG', async () => {
+test('every action has complete metadata and the original assets are present', async () => {
   const manifest = JSON.parse(await readFile(new URL('../src/memes.json', import.meta.url), 'utf8'));
   assert.deepEqual(Object.keys(manifest).sort(), [...actions].sort());
-  for (const { name, hint, caption, freezeCaption, image, alt, source } of Object.values(manifest)) {
+  for (const [action, { name, hint, caption, freezeCaption, image, alt, source }] of Object.entries(manifest)) {
     assert.ok([name, hint, caption, freezeCaption, image, alt, source].every(Boolean));
+    if (action === 'hand-on-chin') {
+      assert.equal(image, 'local-memes/thinking-meme.jpg');
+      assert.equal(caption, '让我想想');
+      continue;
+    }
     assert.match(image, /^memes\/[a-z-]+\.png$/);
     const png = await readFile(new URL(`../public/${image}`, import.meta.url));
     assert.equal(png.subarray(1, 4).toString(), 'PNG');
   }
+});
+
+test('either hand can hold the chin, even if the non-acting wrist or finger landmarks are out of view', () => {
+  const left = pose('hand-on-chin');
+  left[16].visibility = left[17].visibility = left[19].visibility = 0;
+  for (const points of [left, pose('chin-right')]) {
+    assert.deepEqual(frames(new Recognizer(), points, 0, 1000), [{ action: 'hand-on-chin', time: 300 }]);
+  }
+});
+
+test('chin hold stays deduplicated during occlusion and rearms after lowering the active hand', () => {
+  const recognizer = new Recognizer();
+  const rest = pose('neutral');
+  const held = pose('hand-on-chin');
+  const occluded = pose('hand-on-chin');
+  for (const points of [rest, held, occluded]) points[16].visibility = 0;
+  occluded[15].visibility = 0;
+  assert.deepEqual(frames(recognizer, held, 0, 200), []);
+  assert.deepEqual(frames(recognizer, occluded, 250, 250), []);
+  assert.deepEqual(frames(recognizer, held, 300, 400), [{ action: 'hand-on-chin', time: 400 }]);
+  assert.deepEqual(frames(recognizer, occluded, 450, 850), []);
+  assert.deepEqual(frames(recognizer, held, 900, 1200), []);
+  assert.deepEqual(frames(recognizer, rest, 1250, 1550), []);
+  assert.deepEqual(frames(recognizer, held, 1600, 2000), [{ action: 'hand-on-chin', time: 1900 }]);
+});
+
+test('chin rule rejects brief face passes and near-face negative examples', () => {
+  for (const [label, wrist, hand] of [
+    ['nose touch', [326, 127], [320, 119]],
+    ['covered mouth', [329, 158], [322, 137]],
+    ['drinking with hand off-center', [351, 156], [350, 139]],
+    ['hair adjustment', [351, 113], [349, 100]],
+  ]) {
+    const points = pose('hand-on-chin');
+    for (const [index, [x, y]] of [[15, wrist], [17, hand], [19, hand]]) {
+      points[index] = { x: x / 640, y: y / 480, visibility: 0.99 };
+    }
+    assert.ok(frames(new Recognizer(), points, 0, 900).every(({ action }) => action !== 'hand-on-chin'), label);
+  }
+  const recognizer = new Recognizer();
+  assert.deepEqual(frames(recognizer, pose('hand-on-chin'), 0, 200), []);
+  assert.deepEqual(frames(recognizer, pose('neutral'), 250, 700), []);
 });

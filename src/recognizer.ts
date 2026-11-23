@@ -1,11 +1,11 @@
-export const actions = ['hands-up', 'arms-out', 'wave', 'arms-crossed'] as const;
+export const actions = ['hands-up', 'arms-out', 'wave', 'arms-crossed', 'hand-on-chin'] as const;
 export type Action = typeof actions[number];
 export type Landmark = { x: number; y: number; visibility: number };
 type Point = Pick<Landmark, 'x' | 'y'>;
-type Arm = { shoulder: Point; elbow?: Point; wrist?: Point };
+type Arm = { shoulder: Point; elbow?: Point; wrist?: Point; hand?: Point };
 type Sample = { x: number; y: number; time: number };
 type StaticAction = Exclude<Action, 'wave'>;
-type Joint = 'head' | 'shoulders' | 'elbows' | 'wrists';
+type Joint = 'head' | 'mouth' | 'shoulders' | 'elbows' | 'wrists';
 type Interruption = 'changed' | 'ambiguous' | 'occlusion-timeout' | 'no-person' | 'frame-gap';
 type Candidate = { action: StaticAction; elapsed: number; lastMatch: number; paused: boolean };
 export type Feedback = {
@@ -17,6 +17,7 @@ export type Feedback = {
 };
 
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 const HOLD = 300;
 const OCCLUSION = 150;
 const RELEASE = 250;
@@ -35,7 +36,7 @@ function normalize(points: Landmark[], width: number, height: number) {
   if (!left || !right) return;
   const scale = distance(left, right);
   if (scale < height * 0.075 || Math.abs(left.x - right.x) < scale * 0.65) return null;
-  const center = { x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 };
+  const center = midpoint(left, right);
   const relative = (point: Point): Point => ({
     x: (point.x - center.x) / scale,
     y: (point.y - center.y) / scale,
@@ -44,12 +45,22 @@ function normalize(points: Landmark[], width: number, height: number) {
     const point = pixel(index);
     return point && relative(point);
   };
+  const mouthLeft = at(9);
+  const mouthRight = at(10);
+  const arm = (shoulder: Point, elbow: number, wrist: number, index: number, pinky: number): Arm => {
+    const finger = at(index);
+    const outerFinger = at(pinky);
+    return {
+      shoulder: relative(shoulder),
+      elbow: at(elbow),
+      wrist: at(wrist),
+      hand: finger && outerFinger ? midpoint(finger, outerFinger) : finger ?? outerFinger,
+    };
+  };
   return {
     head: at(0),
-    arms: [
-      { shoulder: relative(left), elbow: at(13), wrist: at(15) },
-      { shoulder: relative(right), elbow: at(14), wrist: at(16) },
-    ] as const,
+    mouth: mouthLeft && mouthRight ? midpoint(mouthLeft, mouthRight) : undefined,
+    arms: [arm(left, 13, 15, 19, 17), arm(right, 14, 16, 20, 18)] as const,
   };
 }
 
@@ -73,6 +84,20 @@ function crosses(arm: Arm, other: Arm) {
   return elbow ? (wrist.x - elbow.x) * side >= 0.35 : undefined;
 }
 
+function touchesChin({ shoulder, elbow, wrist, hand }: Arm, nose: Point, mouth: Point) {
+  if (!wrist) return undefined;
+  const chinDepth = mouth.y - nose.y;
+  if (chinDepth < 0.04 || chinDepth > 0.28) return false;
+  const contact = hand ?? wrist;
+  // Shoulders set the scale. The nose-to-mouth distance estimates the chin's height.
+  if (Math.abs(wrist.x - mouth.x) > 0.38 || wrist.y < mouth.y + 0.04 ||
+      wrist.y > mouth.y + chinDepth + 0.35 || Math.abs(contact.x - mouth.x) > 0.24 ||
+      contact.y < mouth.y + 0.03 || contact.y > mouth.y + chinDepth + 0.17) return false;
+  if (!elbow) return undefined;
+  const length = distance(shoulder, elbow) + distance(elbow, wrist);
+  return elbow.y - wrist.y >= 0.25 && distance(shoulder, wrist) <= length * 0.86;
+}
+
 function armsRaised(arms: readonly Arm[]) {
   return arms.every(({ wrist, shoulder }) => wrist && wrist.y <= shoulder.y - 0.24);
 }
@@ -94,7 +119,9 @@ function hasReversal(samples: Sample[]) {
   return false;
 }
 
-function staticMatch(action: StaticAction, pose: NonNullable<ReturnType<typeof normalize>>) {
+const staticActions = ['hands-up', 'arms-out', 'arms-crossed'] as const;
+
+function staticMatch(action: typeof staticActions[number], pose: NonNullable<ReturnType<typeof normalize>>) {
   const { head, arms: [left, right] } = pose;
   if (action === 'hands-up') {
     if (!head) return undefined;
@@ -108,11 +135,11 @@ function staticMatch(action: StaticAction, pose: NonNullable<ReturnType<typeof n
   return a === true && b === true ? true : undefined;
 }
 
-const staticActions = ['hands-up', 'arms-out', 'arms-crossed'] as const;
 const requiredJoints: Record<Action, Joint[]> = {
   'hands-up': ['shoulders', 'head', 'wrists'],
   'arms-out': ['shoulders', 'elbows', 'wrists'],
   'arms-crossed': ['shoulders', 'elbows', 'wrists'],
+  'hand-on-chin': ['shoulders', 'head', 'mouth', 'elbows', 'wrists'],
   wave: ['shoulders', 'wrists'],
 };
 
@@ -121,6 +148,7 @@ export class Recognizer {
   private history: [Sample[], Sample[]] = [[], []];
   private candidate?: Candidate;
   private lockedWaveHand?: number;
+  private lockedChinHand?: number;
   private interruption?: Interruption;
   private locked = new Map<Action, number | null>();
   private lastTime = -Infinity;
@@ -136,6 +164,10 @@ export class Recognizer {
     this.lastTime = time;
 
     const pose = normalize(points, width, height);
+    const chinHands = pose?.head && pose.mouth
+      ? [touchesChin(pose.arms[0], pose.head, pose.mouth), touchesChin(pose.arms[1], pose.head, pose.mouth)]
+      : undefined;
+    const chinHand = chinHands?.indexOf(true) ?? -1;
     const matches = new Map<Action, boolean | undefined>();
     const missing: Joint[] = [];
     let waveHint: Feedback['waveHint'];
@@ -143,16 +175,19 @@ export class Recognizer {
     if (pose) {
       const [left, right] = pose.arms;
       if (!pose.head) missing.push('head');
+      if (!pose.mouth) missing.push('mouth');
       if (!left.elbow || !right.elbow) missing.push('elbows');
       if (!left.wrist || !right.wrist) missing.push('wrists');
       for (const action of staticActions) matches.set(action, staticMatch(action, pose));
+      if (chinHand >= 0) matches.set('hand-on-chin', chinHands?.lastIndexOf(true) === chinHand);
+      else if (chinHands?.every((match) => match === false)) matches.set('hand-on-chin', false);
       const raised = ({ wrist, shoulder }: Arm) => wrist && wrist.y <= shoulder.y - 0.12;
       const bothHandsRaised = armsRaised(pose.arms);
       if (bothHandsRaised) waveHint = 'both-hands';
       pose.arms.forEach((arm, index) => {
         const { wrist, shoulder } = arm;
         const nearHead = wrist && pose.head && Math.abs(wrist.x - pose.head.x) < 0.42 && wrist.y < pose.head.y + 0.33;
-        if (!wrist || !raised(arm) || bothHandsRaised || nearHead) {
+        if (!wrist || !raised(arm) || bothHandsRaised || nearHead || chinHands?.[index] === true) {
           this.history[index] = [];
           return;
         }
@@ -169,10 +204,14 @@ export class Recognizer {
     }
 
     for (const [action, releasedAt] of this.locked) {
+      let match = matches.get(action);
+      if (action === 'hand-on-chin' && match === undefined && this.lockedChinHand !== undefined) {
+        match = chinHands?.[this.lockedChinHand];
+      }
       const incomplete = action === 'wave' && this.lockedWaveHand !== undefined
         ? !pose?.arms[this.lockedWaveHand].wrist
-        : missing.some((joint) => requiredJoints[action].includes(joint));
-      if (incomplete || matches.get(action) !== false) this.locked.set(action, null);
+        : action !== 'hand-on-chin' && missing.some((joint) => requiredJoints[action].includes(joint));
+      if (incomplete || match !== false) this.locked.set(action, null);
       else if (releasedAt === null) this.locked.set(action, time);
       else if (time - releasedAt >= RELEASE) this.locked.delete(action);
     }
@@ -210,7 +249,8 @@ export class Recognizer {
       if (waveHint) {
         this.report('searching', 'wave', [], waveHint);
       } else {
-        this.report(missing.length ? 'missing' : pose === null ? 'framing' : 'searching', undefined, missing);
+        const commonMissing = missing.filter((joint) => joint !== 'mouth');
+        this.report(commonMissing.length ? 'missing' : pose === null ? 'framing' : 'searching', undefined, commonMissing);
       }
       return;
     }
@@ -238,6 +278,7 @@ export class Recognizer {
     this.candidate = undefined;
     this.locked.set(action, null);
     if (action === 'wave') this.lockedWaveHand = waveHand;
+    if (action === 'hand-on-chin') this.lockedChinHand = chinHand;
     this.lastTrigger = time;
     this.report('matched', action);
     return { action, time };

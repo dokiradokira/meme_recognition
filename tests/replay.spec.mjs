@@ -9,6 +9,7 @@ const handsUp = '我投降';
 const armsOut = '我宣布个事';
 const crossed = '这事我不同意';
 const wave = '嗨，看到我了吗';
+const thinking = '让我想想';
 
 for (const [file, expected] of [
   ['switch.webm', [handsUp, armsOut]],
@@ -19,6 +20,9 @@ for (const [file, expected] of [
   ['wave-slow-right.webm', [wave]],
   ['crossed-natural.webm', [crossed]],
   ['similar-negatives.webm', []],
+  ['chin-left.webm', [thinking]],
+  ['chin-right-switch.webm', [handsUp, thinking, armsOut, thinking]],
+  ['chin-negatives.webm', []],
 ]) {
   test('production MediaPipe replay: ' + file, async ({ page }, testInfo) => {
     test.skip(!directory, 'Set MEME_REPLAY_DIR to the directory of consented recordings.');

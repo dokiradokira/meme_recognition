@@ -8,6 +8,15 @@
     "alt": "小猫睁大眼睛，举起双爪",
     "source": "项目原创插画，可随项目分发"
   },
+  "hand-on-chin": {
+    "name": "手抵下巴",
+    "hint": "用一只手轻抵下巴，保持片刻",
+    "caption": "让我想想",
+    "freezeCaption": "让我想想",
+    "image": "local-memes/thinking-meme.jpg",
+    "alt": "黄色角色用一只手抵着下巴思考",
+    "source": "用户提供的本地附件"
+  },
   "arms-out": {
     "name": "双臂横举",
     "hint": "抬起双臂向两侧展开，手腕接近肩高",

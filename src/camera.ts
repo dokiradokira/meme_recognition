@@ -1,13 +1,11 @@
 import type { PoseDetector } from './pose';
 import { Recognizer, type Action, type Feedback, type Landmark } from './recognizer';
 
-export type CameraMode = 'pose' | 'image';
-type Phase = 'idle' | 'requesting' | 'connecting' | 'loading' | 'active' | 'error';
+type Phase = 'idle' | 'requesting' | 'loading' | 'active' | 'error';
 type View = {
   status(phase: Phase, error?: string): void;
   frame(points: Landmark[], feedback: Feedback, time: number): void;
   result(action: Action): void;
-  imageFrame(time: number): void;
   devices(cameras: MediaDeviceInfo[], selected: string): void;
   clear(): void;
 };
@@ -39,7 +37,6 @@ function cameraError(error: unknown) {
 export class Camera {
   private session?: Session;
   private selected = '';
-  private mode: CameraMode = 'pose';
 
   constructor(
     private video: HTMLVideoElement,
@@ -58,14 +55,6 @@ export class Camera {
   toggle() {
     if (this.session) this.stop();
     else void this.start();
-  }
-
-  setMode(mode: CameraMode) {
-    if (mode === this.mode) return;
-    this.mode = mode;
-    if (!this.session) return;
-    this.stop();
-    void this.start();
   }
 
   select(deviceId: string) {
@@ -123,23 +112,21 @@ export class Camera {
       session.deviceId = track.getSettings().deviceId || this.selected;
       track.addEventListener('ended', disconnect, { once: true });
       this.video.srcObject = stream;
-      this.view.status(this.mode === 'pose' ? 'loading' : 'connecting');
+      this.view.status('loading');
       this.watchFrames(session);
       await this.video.play();
       if (this.session !== session) return;
       window.clearInterval(session.watchdog);
-      if (this.mode === 'pose') {
-        modelLoading = true;
-        const detector = await this.load();
-        if (this.session !== session) {
-          detector.close();
-          return;
-        }
-        session.detector = detector;
+      modelLoading = true;
+      const detector = await this.load();
+      if (this.session !== session) {
+        detector.close();
+        return;
       }
+      session.detector = detector;
       session.ready = true;
       this.view.status('active');
-      this.track(session);
+      this.track(session, detector);
       void this.refreshDevices(session);
     } catch (error) {
       if (this.session !== session) return;
@@ -171,7 +158,7 @@ export class Camera {
     }, 500);
   }
 
-  private track(session: Session) {
+  private track(session: Session, detector: PoseDetector) {
     const recognizer = new Recognizer();
     let latestFrame = -Infinity;
     let previous = -Infinity;
@@ -186,14 +173,10 @@ export class Camera {
       if (time - previous >= 65) {
         previous = time;
         try {
-          if (session.detector) {
-            const points = session.detector.detect(this.video, time);
-            const event = recognizer.update(points, this.video.videoWidth, this.video.videoHeight, time);
-            this.view.frame(points, recognizer.feedback, time);
-            if (event) this.view.result(event.action);
-          } else {
-            this.view.imageFrame(time);
-          }
+          const points = detector.detect(this.video, time);
+          const event = recognizer.update(points, this.video.videoWidth, this.video.videoHeight, time);
+          this.view.frame(points, recognizer.feedback, time);
+          if (event) this.view.result(event.action);
         } catch {
           this.stop('姿态识别中断。请重试。');
           return;
