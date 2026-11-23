@@ -1,8 +1,8 @@
-import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
+import { FilesetResolver, PoseLandmarker, type ImageSource } from '@mediapipe/tasks-vision';
 import type { Landmark } from './recognizer';
 
 export interface PoseDetector {
-  detect(video: HTMLVideoElement, time: number): Landmark[];
+  detect(frame: ImageSource, time: number): Landmark[];
   close(): void;
 }
 
@@ -15,7 +15,7 @@ export async function loadDetector(): Promise<PoseDetector> {
     numPoses: 1,
   });
   return {
-    detect: (video, time) => detector.detectForVideo(video, time).landmarks[0] ?? [],
+    detect: (frame, time) => detector.detectForVideo(frame, time).landmarks[0] ?? [],
     close: () => detector.close(),
   };
 }
