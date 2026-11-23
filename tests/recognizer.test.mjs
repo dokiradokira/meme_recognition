@@ -4,6 +4,31 @@ import { test } from 'node:test';
 import { actions, Recognizer } from '../src/recognizer.ts';
 import { pose } from './fixtures.mjs';
 
+test('v2 acceptance baseline shows how small geometry changes block the three harder gestures', () => {
+  const out = pose('arms-out');
+  // The wrists are visible and extended but about 0.30 shoulder widths below the shoulders.
+  out[15].y = out[16].y = 215 / 480;
+  assert.equal(frames(new Recognizer(), out, 0, 1000).length, 0, 'slightly lowered arms');
+
+  const crossed = pose('arms-crossed');
+  // The wrist passes the midline, but by less than 0.08 shoulder widths.
+  crossed[15].x = 314 / 640;
+  assert.equal(frames(new Recognizer(), crossed, 0, 1000).length, 0, 'shallow wrist crossing');
+
+  for (const variant of ['other wrist out of frame', 'other wrist slightly above shoulder', 'short sweep', 'slow sweep']) {
+    const recognizer = new Recognizer();
+    const sweep = variant === 'short sweep' ? [0, 12, 26, 12, 0] : [0, 15, 40, 15, 0];
+    const interval = variant === 'slow sweep' ? 250 : 100;
+    const events = sweep.flatMap((offset, index) => {
+      const points = pose('wave-left', offset);
+      if (variant === 'other wrist out of frame') points[16].visibility = 0.54;
+      if (variant === 'other wrist slightly above shoulder') points[16].y = 183 / 480;
+      return recognizer.update(points, 640, 480, index * interval) ?? [];
+    });
+    assert.deepEqual(events, [], variant);
+  }
+});
+
 function frames(recognizer, points, start, end, width = 640, height = 480) {
   const events = [];
   for (let time = start; time <= end; time += 50) {

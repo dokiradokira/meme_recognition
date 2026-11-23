@@ -159,6 +159,39 @@ test('freeze is opt-in, is replaced by a new action, and stale callbacks cannot 
   await expect(page.locator('#meme-caption')).toHaveText('我投降');
 });
 
+test('v2 acceptance baseline only freezes hands-up but repeats it without refreshing', async ({ page }) => {
+  await injectDetector(page);
+  const toggle = page.getByRole('checkbox', { name: '本人定格' });
+  const frozen = page.locator('#freeze-frame');
+  const caption = page.locator('#meme-caption');
+  const setPose = (action) => page.evaluate((points) => { window.pose = points; }, pose(action));
+  await begin(page);
+  await toggle.check();
+  await setPose('hands-up');
+  await expect(caption).toHaveText('我投降');
+  await expect(frozen).toBeVisible();
+  await expect(frozen).toBeHidden();
+
+  await setPose('arms-out');
+  await expect(caption).toHaveText('我宣布个事');
+  await expect(frozen).toBeHidden();
+  await setPose('arms-crossed');
+  await expect(caption).toHaveText('这事我不同意');
+  await expect(frozen).toBeHidden();
+  await page.evaluate((sequence) => {
+    window.pose = sequence.at(-1);
+    window.poseSequence = sequence;
+  }, [0, 15, 40, 15, 0].map((offset) => pose('wave-left', offset)));
+  await expect(caption).toHaveText('嗨，看到我了吗');
+  await expect(frozen).toBeHidden();
+
+  await setPose('hands-up');
+  await expect(caption).toHaveText('我投降');
+  await expect(frozen).toBeVisible();
+  await expect(toggle).toBeChecked();
+  expect(await page.evaluate(() => window.streams.length)).toBe(1);
+});
+
 test('reduced motion displays a static freeze, and tracking loss, opt-out and capture failure fall back to the cat', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await injectDetector(page);
