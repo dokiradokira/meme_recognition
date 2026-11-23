@@ -84,6 +84,26 @@ test('four actions replace the result, tracking loss retains it, and restart cle
   expect(await page.evaluate(() => window.streams[1].getVideoTracks()[0].readyState)).toBe('ended');
 });
 
+test('MVP baseline keeps the first result during elbow occlusion and switches in the same session after recovery', async ({ page }) => {
+  await injectDetector(page);
+  await page.getByText('骨架调试').click();
+  await page.evaluate((points) => { window.pose = points; }, pose('hands-up'));
+  await begin(page);
+  await expect(page.locator('#meme-caption')).toHaveText('我投降');
+  const occluded = pose('arms-out');
+  occluded[13].visibility = 0.54;
+  await page.evaluate((points) => {
+    window.pose = points;
+    window.poseSequence = Array.from({ length: 12 }, () => points);
+  }, occluded);
+  await expect.poll(() => page.evaluate(() => window.poseSequence.length)).toBe(0);
+  await expect(page.locator('#diagnosis')).toHaveText('已检测到姿态');
+  await expect(page.locator('#meme-caption')).toHaveText('我投降');
+  await page.evaluate((points) => { window.pose = points; }, pose('arms-out'));
+  await expect(page.locator('#meme-caption')).toHaveText('我宣布个事');
+  expect(await page.evaluate(() => window.streams.length)).toBe(1);
+});
+
 test('permission denial, device busy, and disconnection each support retry', async ({ page }) => {
   await injectDetector(page);
   await page.evaluate(() => { window.cameraError = 'NotAllowedError'; });

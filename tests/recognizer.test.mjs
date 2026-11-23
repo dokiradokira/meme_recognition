@@ -74,6 +74,35 @@ test('switches actions and applies global cooldown to a completed wave', () => {
   assert.deepEqual(frames(recognizer, pose('arms-out'), 650, 950), [{ action: 'arms-out', time: 950 }]);
 });
 
+test('all 12 ordered pairs switch directly with stable landmarks', () => {
+  const perform = (recognizer, action, start) => {
+    if (action !== 'wave') return frames(recognizer, pose(action), start, start + 450);
+    return [0, 15, 40, 15, 0, 0, 0, 0, 0, 0].flatMap((offset, index) =>
+      recognizer.update(pose('wave-left', offset), 640, 480, start + index * 50) ?? []);
+  };
+  for (const first of actions) {
+    for (const second of actions.filter((action) => action !== first)) {
+      const recognizer = new Recognizer();
+      const events = [...perform(recognizer, first, 0), ...perform(recognizer, second, 500)];
+      assert.deepEqual(events.map(({ action }) => action), [first, second], `${first} → ${second}`);
+    }
+  }
+});
+
+test('MVP baseline retains the first result when occasional elbow occlusion interrupts confirmation', () => {
+  const recognizer = new Recognizer();
+  const stable = pose('arms-out');
+  const occluded = pose('arms-out');
+  occluded[13].visibility = 0.54;
+  assert.deepEqual(frames(recognizer, pose('hands-up'), 0, 400), [{ action: 'hands-up', time: 300 }]);
+  for (let time = 450; time <= 2400; time += 50) {
+    const points = (time - 450) % 250 === 200 ? occluded : stable;
+    assert.equal(recognizer.update(points, 640, 480, time), undefined);
+    assert.equal(recognizer.diagnosis, 'tracking');
+  }
+  assert.deepEqual(frames(recognizer, stable, 2450, 2800), [{ action: 'arms-out', time: 2750 }]);
+});
+
 test('missing subject, small shoulder span and gaps never complete a stale candidate', () => {
   const recognizer = new Recognizer();
   const tooFar = pose('hands-up').map((point) => ({
