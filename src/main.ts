@@ -1,5 +1,6 @@
 import './style.css';
-import { Camera } from './camera';
+import { Camera, type CameraMode } from './camera';
+import { ImageMatcher, imageArea } from './image-matcher';
 import { FreezeFrame } from './freeze-frame';
 import memes from './memes.json';
 import { actions, type Action, type Feedback, type Landmark } from './recognizer';
@@ -9,6 +10,13 @@ const preview = element<HTMLVideoElement>('preview');
 const skeleton = element<HTMLCanvasElement>('skeleton');
 const context = skeleton.getContext('2d');
 const debug = element<HTMLInputElement>('debug');
+const mode = element<HTMLSelectElement>('camera-mode');
+const target = element<HTMLCanvasElement>('image-target');
+const referenceFile = element<HTMLInputElement>('reference-file');
+const referenceStatus = element('reference-status');
+const matcher = new ImageMatcher();
+let referenceUrl: string | undefined;
+let importRequest = 0;
 const status = element('status');
 const button = element<HTMLButtonElement>('camera-button');
 const errorText = element('camera-error');
@@ -18,6 +26,7 @@ const deviceControl = element('device-control');
 const deviceSelect = element<HTMLSelectElement>('camera-device');
 const freezeToggle = element<HTMLInputElement>('freeze-toggle');
 const freezeControl = element('freeze-control');
+const freezeCaption = element('freeze-caption');
 const freeze = new FreezeFrame(element('freeze-frame'), element<HTMLCanvasElement>('freeze-canvas'), preview);
 let trackingLostAt: number | undefined;
 const meme = element('meme');
@@ -43,19 +52,56 @@ for (const action of actions) {
   cards.set(action, item);
 }
 
-function showResult(action: Action) {
+function showCard(name: string, caption: string, url: string, alt: string, action?: Action) {
   freeze.clear();
-  const { name, caption, image: path, alt } = memes[action];
   image.hidden = false;
   image.alt = alt;
-  image.src = asset(path);
+  image.src = url;
   element('meme-caption').textContent = caption;
   element('meme-action').textContent = name;
   element('result-empty').hidden = true;
   meme.hidden = false;
   for (const [key, card] of cards) card.classList.toggle('selected', key === action);
-  if (action === 'hands-up' && freezeToggle.checked) freeze.show();
 }
+
+function clearResult() {
+  freeze.clear();
+  meme.hidden = true;
+  image.removeAttribute('src');
+  image.alt = '';
+  element('meme-caption').textContent = '';
+  element('meme-action').textContent = '';
+  element('result-empty').hidden = false;
+  for (const card of cards.values()) card.classList.remove('selected');
+}
+
+function showResult(action: Action) {
+  const { name, caption, freezeCaption: effectCaption, image: path, alt } = memes[action];
+  showCard(name, caption, asset(path), alt, action);
+  if (freezeToggle.checked) {
+    freezeCaption.textContent = effectCaption;
+    freeze.show();
+  }
+}
+
+function drawTarget() {
+  const { videoWidth: width, videoHeight: height } = preview;
+  if (!width || !height || (target.width === width && target.height === height)) return;
+  target.width = width;
+  target.height = height;
+  const ctx = target.getContext('2d');
+  if (!ctx) return;
+  const { x, y, size } = imageArea(width, height);
+  ctx.lineWidth = Math.max(2, Math.round(size / 100));
+  ctx.strokeStyle = '#dbff67';
+  ctx.strokeRect(x, y, size, size);
+}
+
+function showFeedback(message: string) {
+  if (feedbackText.textContent !== message) feedbackText.textContent = message;
+  feedbackText.hidden = false;
+}
+
 
 image.addEventListener('error', () => { image.hidden = true; });
 
@@ -89,7 +135,7 @@ function drawSkeleton(points: Landmark[]) {
   }
 }
 
-const labels = { idle: '待开启', requesting: '等待摄像头授权…', loading: '正在加载姿态模型…', active: '识别中', error: '需要重试' };
+const labels = { idle: '待开启', requesting: '等待摄像头授权…', connecting: '正在开启摄像头…', loading: '正在加载姿态模型…', active: '识别中', error: '需要重试' };
 const jointsNames = { head: '头部', shoulders: '双肩', elbows: '手肘', wrists: '手腕' };
 const interruptionNames = {
   changed: '姿态改变',
@@ -99,7 +145,9 @@ const interruptionNames = {
   'frame-gap': '视频帧间隔过长',
 };
 
-function feedbackMessage({ state, action, missing }: Feedback) {
+function feedbackMessage({ state, action, missing, waveHint }: Feedback) {
+  if (waveHint === 'both-hands') return '挥手时请放低另一只手';
+  if (waveHint === 'motion') return '请让同一只手在肩上方挥出再回来，幅度可以大一点';
   const name = action && memes[action].name;
   switch (state) {
     case 'no-person': return '未检测到人物，请回到画面';
@@ -116,12 +164,14 @@ const camera = new Camera(preview, {
   status(phase, error) {
     status.textContent = labels[phase];
     status.dataset.phase = phase;
-    const started = phase === 'loading' || phase === 'active';
+    const started = phase === 'loading' || phase === 'connecting' || phase === 'active';
     const busy = started || phase === 'requesting';
     preview.hidden = !started;
     element('camera-empty').hidden = started;
-    skeleton.hidden = phase !== 'active' || !debug.checked;
-    freezeControl.hidden = phase !== 'active';
+    const poseMode = mode.value === 'pose';
+    skeleton.hidden = phase !== 'active' || !poseMode || !debug.checked;
+    target.hidden = phase !== 'active' || poseMode;
+    freezeControl.hidden = phase !== 'active' || !poseMode;
     if (phase !== 'active') deviceControl.hidden = true;
     button.textContent = phase === 'error' ? '重试' : busy ? '关闭摄像头' : '开启摄像头';
     button.classList.toggle('stop', busy);
@@ -129,14 +179,14 @@ const camera = new Camera(preview, {
     errorText.hidden = !error;
   },
   frame(points, feedback, time) {
-    const message = feedbackMessage(feedback);
-    if (feedbackText.textContent !== message) feedbackText.textContent = message;
-    feedbackText.hidden = false;
+    showFeedback(feedbackMessage(feedback));
     const details = [];
     if (feedback.action && (feedback.state === 'holding' || feedback.state === 'missing')) {
       details.push('候选动作：' + memes[feedback.action].name);
     }
     if (feedback.missing?.length) details.push('缺少关键点：' + feedback.missing.map((joint) => jointsNames[joint]).join('、'));
+    if (feedback.waveHint === 'motion') details.push('挥手：等待完整往返幅度');
+    if (feedback.waveHint === 'both-hands') details.push('挥手：检测到两只手同时抬高');
     if (feedback.interruption) details.push('上次确认中断：' + interruptionNames[feedback.interruption]);
     diagnosisText.textContent = details.join(' · ');
     diagnosisText.hidden = !debug.checked || !details.length;
@@ -151,6 +201,20 @@ const camera = new Camera(preview, {
     }
   },
   result: showResult,
+  imageFrame(time) {
+    drawTarget();
+    const match = matcher.update(preview, time);
+    if (match === 'no-reference') {
+      showFeedback('请先导入参考图');
+    } else if (match === 'aligning') {
+      showFeedback('已对准，请保持片刻');
+    } else if (match === 'search') {
+      showFeedback('请把图片完整对齐方框，尽量贴合四边');
+    } else {
+      showFeedback('已对准图片，移开后可以再识别');
+      if (match === 'trigger' && referenceUrl) showCard('识图', '让我想想', referenceUrl, '导入的表情包');
+    }
+  },
   devices(cameras, selected) {
     const accurateSelection = cameras.some(({ deviceId }) => deviceId === selected);
     const options = cameras.map(({ deviceId, label }, index) => new Option(label || '摄像头 ' + (index + 1), deviceId));
@@ -160,28 +224,58 @@ const camera = new Camera(preview, {
     deviceControl.hidden = !cameras.length;
   },
   clear() {
-    freeze.clear();
+    clearResult();
+    matcher.reset();
+    target.width = target.height = 0;
     trackingLostAt = undefined;
     context?.clearRect(0, 0, skeleton.width, skeleton.height);
     feedbackText.hidden = true;
     feedbackText.textContent = '';
     diagnosisText.hidden = true;
     diagnosisText.textContent = '';
-    meme.hidden = true;
-    image.removeAttribute('src');
-    image.alt = '';
-    element('meme-caption').textContent = '';
-    element('meme-action').textContent = '';
-    element('result-empty').hidden = false;
-    for (const card of cards.values()) card.classList.remove('selected');
   },
 }, async () => (await import('./pose')).loadDetector());
 
 button.addEventListener('click', () => camera.toggle());
+mode.addEventListener('change', () => {
+  const selected = mode.value as CameraMode;
+  const poseMode = selected === 'pose';
+  element('reference-control').hidden = poseMode;
+  element('debug-control').hidden = !poseMode;
+  element('result-placeholder').textContent = poseMode ? '等待第一个动作' : '等待识别图片';
+  element('result-hint').textContent = poseMode ? '从下方挑一个动作试试' : '导入参考图，再将同一张图举到摄像头前';
+  camera.setMode(selected);
+});
+referenceFile.addEventListener('change', async () => {
+  const file = referenceFile.files?.[0];
+  referenceFile.value = '';
+  if (!file) return;
+  const request = ++importRequest;
+  const current = () => request === importRequest;
+  referenceStatus.textContent = '正在读取参考图…';
+  try {
+    if (file.size > 10 * 1024 * 1024) throw new Error('Image exceeds 10 MiB');
+    await matcher.load(file, current);
+    if (!current()) return;
+    if (mode.value === 'image') clearResult();
+    if (referenceUrl) URL.revokeObjectURL(referenceUrl);
+    referenceUrl = URL.createObjectURL(file);
+    referenceStatus.textContent = '已导入 ' + file.name;
+  } catch {
+    if (current()) referenceStatus.textContent = '读取失败。请选择不超过 10 MB、清晰的 JPG、PNG 或 WebP 图片。' +
+      (referenceUrl ? ' 已保留上一张参考图。' : '');
+  }
+});
 deviceSelect.addEventListener('change', () => camera.select(deviceSelect.value));
 freezeToggle.addEventListener('change', () => { if (!freezeToggle.checked) freeze.clear(); });
 debug.addEventListener('change', () => {
   skeleton.hidden = status.dataset.phase !== 'active' || !debug.checked;
   diagnosisText.hidden = !debug.checked || !diagnosisText.textContent;
 });
-window.addEventListener('pagehide', () => camera.stop());
+window.addEventListener('pagehide', (event) => {
+  camera.stop();
+  if (!event.persisted) {
+    importRequest++;
+    if (referenceUrl) URL.revokeObjectURL(referenceUrl);
+  }
+});

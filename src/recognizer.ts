@@ -3,7 +3,7 @@ export type Action = typeof actions[number];
 export type Landmark = { x: number; y: number; visibility: number };
 type Point = Pick<Landmark, 'x' | 'y'>;
 type Arm = { shoulder: Point; elbow?: Point; wrist?: Point };
-type Sample = { x: number; time: number };
+type Sample = { x: number; y: number; time: number };
 type StaticAction = Exclude<Action, 'wave'>;
 type Joint = 'head' | 'shoulders' | 'elbows' | 'wrists';
 type Interruption = 'changed' | 'ambiguous' | 'occlusion-timeout' | 'no-person' | 'frame-gap';
@@ -13,6 +13,7 @@ export type Feedback = {
   action?: Action;
   missing?: Joint[];
   interruption?: Interruption;
+  waveHint?: 'motion' | 'both-hands';
 };
 
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -20,7 +21,8 @@ const HOLD = 300;
 const OCCLUSION = 150;
 const RELEASE = 250;
 const COOLDOWN = 300;
-const WAVE_WINDOW = 800;
+const WAVE_WINDOW = 1050;
+const WAVE_SWEEP = 0.22;
 
 function normalize(points: Landmark[], width: number, height: number) {
   const pixel = (index: number): Point | undefined => {
@@ -55,10 +57,10 @@ function extended(arm: Arm, other: Arm) {
   const { shoulder, elbow, wrist } = arm;
   if (!wrist) return undefined;
   const side = Math.sign(shoulder.x - other.shoulder.x);
-  if ((wrist.x - shoulder.x) * side < 0.6 || Math.abs(wrist.y - shoulder.y) > 0.28) return false;
+  if ((wrist.x - shoulder.x) * side < 0.6 || Math.abs(wrist.y - shoulder.y) > 0.38) return false;
   if (!elbow) return undefined;
   const length = distance(shoulder, elbow) + distance(elbow, wrist);
-  return distance(shoulder, wrist) >= length * 0.94;
+  return (elbow.x - shoulder.x) * side >= 0.2 && distance(shoulder, wrist) >= length * 0.86;
 }
 
 function crosses(arm: Arm, other: Arm) {
@@ -66,9 +68,13 @@ function crosses(arm: Arm, other: Arm) {
   if (elbow && elbow.y - shoulder.y < 0.2) return false;
   if (!wrist) return undefined;
   const side = Math.sign(other.shoulder.x - shoulder.x);
-  if (wrist.x * side <= 0.08 || Math.abs(wrist.x - other.shoulder.x) > 0.6 ||
+  if (wrist.x * side < 0.02 || Math.abs(wrist.x - other.shoulder.x) > 0.6 ||
     wrist.y - other.shoulder.y < 0.12 || wrist.y - other.shoulder.y > 0.8) return false;
-  return elbow ? true : undefined;
+  return elbow ? (wrist.x - elbow.x) * side >= 0.35 : undefined;
+}
+
+function armsRaised(arms: readonly Arm[]) {
+  return arms.every(({ wrist, shoulder }) => wrist && wrist.y <= shoulder.y - 0.24);
 }
 
 function hasReversal(samples: Sample[]) {
@@ -76,10 +82,12 @@ function hasReversal(samples: Sample[]) {
   let maximum = -Infinity;
   let peak = -Infinity;
   let valley = Infinity;
+  const heights = samples.map(({ y }) => y);
+  if (Math.max(...heights) - Math.min(...heights) > 0.45) return false;
   for (const { x } of samples) {
-    if (peak - x >= 0.28 || x - valley >= 0.28) return true;
-    if (x - minimum >= 0.28) peak = Math.max(peak, x);
-    if (maximum - x >= 0.28) valley = Math.min(valley, x);
+    if (peak - x >= WAVE_SWEEP || x - valley >= WAVE_SWEEP) return true;
+    if (x - minimum >= WAVE_SWEEP) peak = Math.max(peak, x);
+    if (maximum - x >= WAVE_SWEEP) valley = Math.min(valley, x);
     minimum = Math.min(minimum, x);
     maximum = Math.max(maximum, x);
   }
@@ -112,6 +120,7 @@ export class Recognizer {
   feedback: Feedback = { state: 'no-person' };
   private history: [Sample[], Sample[]] = [[], []];
   private candidate?: Candidate;
+  private lockedWaveHand?: number;
   private interruption?: Interruption;
   private locked = new Map<Action, number | null>();
   private lastTime = -Infinity;
@@ -129,36 +138,40 @@ export class Recognizer {
     const pose = normalize(points, width, height);
     const matches = new Map<Action, boolean | undefined>();
     const missing: Joint[] = [];
+    let waveHint: Feedback['waveHint'];
+    let waveHand = -1;
     if (pose) {
       const [left, right] = pose.arms;
       if (!pose.head) missing.push('head');
       if (!left.elbow || !right.elbow) missing.push('elbows');
       if (!left.wrist || !right.wrist) missing.push('wrists');
       for (const action of staticActions) matches.set(action, staticMatch(action, pose));
-      if (left.wrist && right.wrist) {
-        let wave = false;
-        pose.arms.forEach(({ wrist, shoulder }, index) => {
-          const other = pose.arms[1 - index];
-          if (!wrist || wrist.y > shoulder.y - 0.12 || !other.wrist || other.wrist.y < other.shoulder.y) {
-            this.history[index] = [];
-            return;
-          }
-          const samples = this.history[index].filter((sample) => time - sample.time <= WAVE_WINDOW);
-          samples.push({ x: wrist.x - shoulder.x, time });
-          this.history[index] = samples;
-          if (hasReversal(samples)) wave = true;
-        });
-        matches.set('wave', wave);
-      } else {
-        this.history = [[], []];
-      }
+      const raised = ({ wrist, shoulder }: Arm) => wrist && wrist.y <= shoulder.y - 0.12;
+      const bothHandsRaised = armsRaised(pose.arms);
+      if (bothHandsRaised) waveHint = 'both-hands';
+      pose.arms.forEach((arm, index) => {
+        const { wrist, shoulder } = arm;
+        const nearHead = wrist && pose.head && Math.abs(wrist.x - pose.head.x) < 0.42 && wrist.y < pose.head.y + 0.33;
+        if (!wrist || !raised(arm) || bothHandsRaised || nearHead) {
+          this.history[index] = [];
+          return;
+        }
+        const samples = this.history[index].filter((sample) => time - sample.time <= WAVE_WINDOW);
+        samples.push({ x: wrist.x - shoulder.x, y: wrist.y - shoulder.y, time });
+        this.history[index] = samples;
+        waveHint = 'motion';
+        if (hasReversal(samples)) waveHand = index;
+      });
+      if (left.wrist || right.wrist) matches.set('wave', waveHand >= 0);
     } else {
       this.history = [[], []];
       if (points.length && pose === undefined) missing.push('shoulders');
     }
 
     for (const [action, releasedAt] of this.locked) {
-      const incomplete = missing.some((joint) => requiredJoints[action].includes(joint));
+      const incomplete = action === 'wave' && this.lockedWaveHand !== undefined
+        ? !pose?.arms[this.lockedWaveHand].wrist
+        : missing.some((joint) => requiredJoints[action].includes(joint));
       if (incomplete || matches.get(action) !== false) this.locked.set(action, null);
       else if (releasedAt === null) this.locked.set(action, time);
       else if (time - releasedAt >= RELEASE) this.locked.delete(action);
@@ -194,7 +207,11 @@ export class Recognizer {
     }
 
     if (!action) {
-      this.report(missing.length ? 'missing' : pose === null ? 'framing' : 'searching', undefined, missing);
+      if (waveHint) {
+        this.report('searching', 'wave', [], waveHint);
+      } else {
+        this.report(missing.length ? 'missing' : pose === null ? 'framing' : 'searching', undefined, missing);
+      }
       return;
     }
     if (this.locked.has(action)) {
@@ -220,6 +237,7 @@ export class Recognizer {
     }
     this.candidate = undefined;
     this.locked.set(action, null);
+    if (action === 'wave') this.lockedWaveHand = waveHand;
     this.lastTrigger = time;
     this.report('matched', action);
     return { action, time };
@@ -230,8 +248,8 @@ export class Recognizer {
     this.candidate = undefined;
   }
 
-  private report(state: Feedback['state'], action?: Action, missing: Joint[] = []) {
-    this.feedback = { state, action, missing, interruption: this.interruption };
+  private report(state: Feedback['state'], action?: Action, missing: Joint[] = [], waveHint?: Feedback['waveHint']) {
+    this.feedback = { state, action, missing, interruption: this.interruption, waveHint };
   }
 
 }

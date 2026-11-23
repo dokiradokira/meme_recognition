@@ -23,6 +23,7 @@
           <div class="stage" id="stage">
             <video id="preview" aria-label="镜像摄像头预览" autoplay muted playsinline hidden></video>
             <canvas id="skeleton" aria-hidden="true" hidden></canvas>
+            <canvas id="image-target" aria-hidden="true" hidden></canvas>
             <div id="camera-empty" class="empty">
               <span class="camera-icon" aria-hidden="true"></span>
               <p>开启摄像头开始</p>
@@ -31,10 +32,21 @@
           </div>
           <div class="controls">
             <button id="camera-button" type="button">开启摄像头</button>
-            <label><input type="checkbox" id="debug"> 骨架调试</label>
+            <label>模式
+              <select id="camera-mode">
+                <option value="pose">动作识别</option>
+                <option value="image">识图</option>
+              </select>
+            </label>
+            <label id="debug-control"><input type="checkbox" id="debug"> 骨架调试</label>
             <label id="device-control" hidden>摄像头
               <select id="camera-device"></select>
             </label>
+          </div>
+          <div id="reference-control" class="reference-control" hidden>
+            <label for="reference-file">参考图</label>
+            <input id="reference-file" type="file" accept="image/jpeg,image/png,image/webp">
+            <p id="reference-status" class="diagnosis" aria-live="polite">导入想识别的图片。</p>
           </div>
           <p id="camera-error" class="error" role="alert" hidden></p>
           <p id="recognition-feedback" class="diagnosis" aria-live="polite" hidden></p>
@@ -45,15 +57,15 @@
           <div class="result" aria-live="polite" aria-atomic="true">
             <div class="empty" id="result-empty">
               <span class="spark" aria-hidden="true">✷</span>
-              <p>等待第一个动作</p>
-              <small>从下方挑一个动作试试</small>
+              <p id="result-placeholder">等待第一个动作</p>
+              <small id="result-hint">从下方挑一个动作试试</small>
             </div>
             <figure id="meme" hidden>
               <div class="meme-visual">
                 <img id="meme-image" alt="">
                 <div id="freeze-frame" class="freeze-frame" aria-hidden="true" hidden>
                   <canvas id="freeze-canvas" width="0" height="0"></canvas>
-                  <span>我投降</span>
+                  <span id="freeze-caption"></span>
                 </div>
               </div>
               <figcaption>
@@ -64,7 +76,7 @@
           </div>
           <div class="controls" id="freeze-control" hidden>
             <label><input type="checkbox" id="freeze-toggle" aria-describedby="freeze-description"> 本人定格</label>
-            <small id="freeze-description">双手举高时，临时用一帧摄像头画面生成定格效果。</small>
+            <small id="freeze-description">识别动作时，临时用一帧摄像头画面生成定格。</small>
           </div>
         </section>
       </div>
@@ -72,7 +84,7 @@
         <h2 id="guide-title">试试这些动作</h2>
         <ul id="actions"></ul>
       </section>
-      <footer>摄像头画面和身体关键点只在浏览器内处理。</footer>
+      <footer>摄像头画面、身体关键点和导入的图片只在浏览器内处理。</footer>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

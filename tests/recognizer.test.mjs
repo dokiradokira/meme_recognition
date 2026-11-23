@@ -4,16 +4,18 @@ import { test } from 'node:test';
 import { actions, Recognizer } from '../src/recognizer.ts';
 import { pose } from './fixtures.mjs';
 
-test('v2 acceptance baseline shows how small geometry changes block the three harder gestures', () => {
+test('natural variations from the v2 report are recognized', () => {
   const out = pose('arms-out');
   // The wrists are visible and extended but about 0.30 shoulder widths below the shoulders.
   out[15].y = out[16].y = 215 / 480;
-  assert.equal(frames(new Recognizer(), out, 0, 1000).length, 0, 'slightly lowered arms');
+  assert.equal(frames(new Recognizer(), out, 0, 1000).length, 1, 'slightly lowered arms');
+  out[13].y = out[14].y = 170 / 480;
+  assert.equal(frames(new Recognizer(), out, 0, 1000).length, 1, 'natural elbow bend');
 
   const crossed = pose('arms-crossed');
   // The wrist passes the midline, but by less than 0.08 shoulder widths.
   crossed[15].x = 314 / 640;
-  assert.equal(frames(new Recognizer(), crossed, 0, 1000).length, 0, 'shallow wrist crossing');
+  assert.equal(frames(new Recognizer(), crossed, 0, 1000).length, 1, 'shallow wrist crossing');
 
   for (const variant of ['other wrist out of frame', 'other wrist slightly above shoulder', 'short sweep', 'slow sweep']) {
     const recognizer = new Recognizer();
@@ -25,8 +27,47 @@ test('v2 acceptance baseline shows how small geometry changes block the three ha
       if (variant === 'other wrist slightly above shoulder') points[16].y = 183 / 480;
       return recognizer.update(points, 640, 480, index * interval) ?? [];
     });
-    assert.deepEqual(events, [], variant);
+    assert.deepEqual(events.map(({ action }) => action), ['wave'], variant);
   }
+});
+
+test('relaxed arm rules reject downward reaches, a one-sided shoulder touch, hair adjustment and two raised hands', () => {
+  const down = pose('arms-out');
+  down[15].y = down[16].y = 244 / 480;
+  assert.deepEqual(frames(new Recognizer(), down, 0, 1000), []);
+  const shoulderTouch = pose('arms-crossed');
+  shoulderTouch[16].x = 260 / 640;
+  assert.deepEqual(frames(new Recognizer(), shoulderTouch, 0, 1000), []);
+  for (const movement of ['hair', 'two-hands', 'small-motion']) {
+    const recognizer = new Recognizer();
+    const offsets = movement === 'small-motion' ? [0, 5, 15, 5, 0] : [0, 15, 40, 15, 0];
+    const events = offsets.flatMap((offset, index) => {
+      const points = pose('wave-left', offset);
+      if (movement === 'hair') {
+        points[15].x = (300 + offset) / 640;
+        points[15].y = 107 / 480;
+      }
+      if (movement === 'two-hands') points[16].y = 155 / 480;
+      return recognizer.update(points, 640, 480, index * 100) ?? [];
+    });
+    assert.deepEqual(events, [], movement);
+    assert.equal(recognizer.feedback.waveHint, {
+      hair: undefined, 'two-hands': 'both-hands', 'small-motion': 'motion',
+    }[movement]);
+  }
+});
+
+test('wave rearms when the active hand lowers even with the other wrist out of frame', () => {
+  const recognizer = new Recognizer();
+  const withOtherHidden = (points) => {
+    points[16].visibility = 0;
+    return points;
+  };
+  const perform = (start) => [0, 15, 40, 15, 0].flatMap((offset, index) =>
+    recognizer.update(withOtherHidden(pose('wave-left', offset)), 640, 480, start + index * 100) ?? []);
+  assert.equal(perform(0).length, 1);
+  assert.deepEqual(frames(recognizer, withOtherHidden(pose('neutral')), 450, 750), []);
+  assert.equal(perform(800).length, 1);
 });
 
 function frames(recognizer, points, start, end, width = 640, height = 480) {
@@ -210,8 +251,8 @@ test('missing subject, small shoulder span and gaps never complete a stale candi
 test('every action has complete metadata and a local PNG', async () => {
   const manifest = JSON.parse(await readFile(new URL('../src/memes.json', import.meta.url), 'utf8'));
   assert.deepEqual(Object.keys(manifest).sort(), [...actions].sort());
-  for (const { name, hint, caption, image, alt, source } of Object.values(manifest)) {
-    assert.ok([name, hint, caption, image, alt, source].every(Boolean));
+  for (const { name, hint, caption, freezeCaption, image, alt, source } of Object.values(manifest)) {
+    assert.ok([name, hint, caption, freezeCaption, image, alt, source].every(Boolean));
     assert.match(image, /^memes\/[a-z-]+\.png$/);
     const png = await readFile(new URL(`../public/${image}`, import.meta.url));
     assert.equal(png.subarray(1, 4).toString(), 'PNG');

@@ -86,3 +86,8 @@ footer { padding: 20px 0 30px; color: var(--dim); font-size: .875rem; }
 @media (max-width: 390px) {
   .guide ul { grid-template-columns: 1fr; }
 }
+
+.reference-control { margin-top: 12px; }
+.reference-control label { display: block; margin-bottom: 6px; color: var(--dim); font-size: .875rem; }
+.reference-control input { max-width: 100%; color: var(--dim); }
+.reference-control input::file-selector-button { font: inherit; padding: 6px 10px; margin-inline-end: 8px; border: 1px solid #566767; border-radius: 6px; color: #f3f7f4; background: #263337; cursor: pointer; }

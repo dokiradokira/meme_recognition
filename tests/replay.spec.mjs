@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 
@@ -6,15 +7,27 @@ const origin = 'http://localhost:4174';
 const clipUrl = origin + '/replay-input.webm';
 const handsUp = '我投降';
 const armsOut = '我宣布个事';
+const crossed = '这事我不同意';
+const wave = '嗨，看到我了吗';
 
 for (const [file, expected] of [
   ['switch.webm', [handsUp, armsOut]],
   ['brief-occlusion.webm', [handsUp, armsOut]],
   ['persistent-occlusion.webm', [handsUp]],
+  ['natural-out.webm', [armsOut]],
+  ['wave-fast-left.webm', [wave]],
+  ['wave-slow-right.webm', [wave]],
+  ['crossed-natural.webm', [crossed]],
+  ['similar-negatives.webm', []],
 ]) {
-  test('production MediaPipe replay: ' + file, async ({ page }) => {
+  test('production MediaPipe replay: ' + file, async ({ page }, testInfo) => {
     test.skip(!directory, 'Set MEME_REPLAY_DIR to the directory of consented recordings.');
     test.setTimeout(45_000);
+    const timings = JSON.parse(await readFile(resolve(directory, 'timings.json'), 'utf8'));
+    const completedAt = timings[file];
+    expect(Array.isArray(completedAt)).toBe(true);
+    expect(completedAt).toHaveLength(expected.length);
+    expect(completedAt.every((time) => Number.isFinite(time) && time >= 0)).toBe(true);
     await page.route(clipUrl, (route) => route.fulfill({
       path: resolve(directory, file),
       contentType: 'video/webm',
@@ -57,7 +70,11 @@ for (const [file, expected] of [
       const caption = document.querySelector('#meme-caption');
       window.replayResults = [];
       new MutationObserver(() => {
-        if (caption.textContent) window.replayResults.push(caption.textContent);
+        const text = caption.textContent;
+        if (!text) return;
+        requestAnimationFrame(() => {
+          window.replayResults.push({ caption: text, time: window.replaySource.currentTime });
+        });
       }).observe(caption, { childList: true });
     });
     await page.getByRole('button', { name: '开启摄像头' }).click();
@@ -68,8 +85,16 @@ for (const [file, expected] of [
       await source.play();
       await ended;
     });
-    expect(await page.evaluate(() => window.replayResults)).toEqual(expected);
-    await expect(page.locator('#meme-caption')).toHaveText(expected.at(-1));
+    const results = await page.evaluate(() => window.replayResults);
+    expect(results.map(({ caption }) => caption)).toEqual(expected);
+    await expect(page.locator('#meme-caption')).toHaveText(expected.at(-1) ?? '');
+    await testInfo.attach('replay-timing', {
+      contentType: 'application/json',
+      body: JSON.stringify(results.map(({ caption, time }, index) => ({
+        caption, completedAtSeconds: completedAt[index],
+        resultAtSeconds: time, latencyMs: Math.round((time - completedAt[index]) * 1000),
+      })), null, 2),
+    });
     await page.getByRole('button', { name: '关闭摄像头' }).click();
   });
 }
